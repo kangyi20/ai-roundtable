@@ -1,0 +1,5 @@
+streamlit
+openai
+pydantic
+uvicorn
+starlette

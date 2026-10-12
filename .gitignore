@@ -1,0 +1,17 @@
+# ============ 真实密钥：绝对不许入库 ============
+.streamlit/secrets.toml
+
+# ============ 虚拟环境与 Python 缓存 ============
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# ============ 运行时产物 ============
+provider_debug.log
+debates/
+debates_smoke/
+
+# ============ IDE / 编辑器 ============
+.idea/
+.vscode/

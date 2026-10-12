@@ -1,0 +1,65 @@
+你是资深 Python 工程师。请在当前空目录生成一个可运行的 Streamlit 小工程，项目名 ai_debate_room。目标：实现“两个 AI 辩论 + 人类裁判 + 第三 AI 评分”的严格回合制系统。只做 MVP，不要 React，不要后端服务，不要数据库服务器，不要过度设计。
+
+硬规则：
+1) 两个辩手 AI 绝不能自动连续发言。必须满足：A 生成草稿 -> 页面展示“待确认” -> 人类裁判点“确认A”或“驳回A” -> 只有确认后 A 的内容才进入公共记录 -> 才允许调用 B。B 同理。任何刷新、双击、 rerun 都不能造成连发或丢状态。
+2) B 的输入必须包含 A 刚被裁判确认的公共稿全文和裁判备注；未确认草稿不得进入公共记录，也不得给下一位辩手看。
+3) 使用 OpenAI 兼容接口调用三个模型：A、B、JUDGE_AI。所有 base_url/api_key/model 从 .streamlit/secrets.toml 读取，禁止写死在代码里。必须支持 MOCK_MODE=true：不调用真实 API，用可预测假输出跑通全部状态机，方便无 Key 验收。
+4) 要省 token：默认不发送全量原文给辩手。采用“分层记忆”：固定规则/辩题/persona + claims ledger + obligations + contradictions + 最近对方上一条已确认全文 + 裁判备注 + 按需 quote 片段。原文全部落盘 JSONL，但常驻上下文用 ledger/摘要。
+5) 生成代码后要能运行：python -m streamlit run app.py。提供 README.md，写明安装、secrets 示例、运行、Mock 验收、导出文件位置。
+
+技术栈：Python 3.11+，Streamlit，openai python SDK，python-dotenv 可不用，secrets 用 st.secrets；本地存储用 JSONL 文件即可。依赖写 requirements.txt：streamlit, openai, pydantic。禁止加不需要的重依赖。
+
+文件结构必须生成：
+app.py                 # Streamlit UI：三栏布局，状态按钮，聊天式气泡，评分面板，导出按钮
+engine.py              # 状态机与规则：状态枚举、can()、confirm/reject/speak flow、round 管理
+providers.py           # Provider 抽象：OpenAICompatibleProvider 和 MockProvider；chat_json/chat_text 接口
+memory.py              # ClaimsLedger/Obligation/RollingSummary/quote_ptr 的数据结构与更新逻辑
+scoring.py             # 第三AI评分：强制JSON、正则提取、重试2次、夹分0-10、与裁判分按权重合并
+storage.py             # DebateStore：debates/{debate_id}.jsonl 追加、恢复、导出 score.json/transcript.jsonl
+prompts.py             # 辩手提示词、记忆写入器提示词、评分提示词，全部中文
+README.md
+requirements.txt
+.streamlit/secrets.example.toml
+
+核心状态机必须实现：IDLE -> A_SPEAKING -> A_WAIT_CONFIRM -> B_SPEAKING -> B_WAIT_CONFIRM -> 下一回合 -> 回合结束 -> SCORING -> DONE。engine.py 暴露 can(action, state) 和 transition(...)，UI 按钮 disabled 必须严格由 can() 决定。A_CONFIRMED/B_CONFIRMED 可作为内部事件，不必是按钮状态。
+
+数据模型用 pydantic：
+Message: id, debate_id, round_no, speaker(A/B/REFEREE/SYSTEM), side(pro/con/none), status(draft/confirmed/rejected/note), content, judge_note, model, temperature, latency_ms, usage_in, usage_out, created_at。
+Claim: id, owner, text, status(open/contested/conceded/rejected/closed), evidence_state(none/weak/sourced), owed_by(A/B/none), due(next/none), attacks[list[str]], contradicts[list[str]], quote_ptr(str|none), summary(str|none)。
+DebateState: state, round_no, max_rounds, topic, pro_side, con_side, word_limit, weight_judge(默认0.6), weight_ai(默认0.4), strict_evidence(bool), mock_mode(bool), messages, claims, obligations, summary, totals(usage/cost估算)。
+
+省 token 上下文构造：build_prompt_for(speaker) 只包含：
+- 中文系统规则：正式辩论、只回应已确认公共记录、先结算 obligations、再回应对方上一条核心命题、每轮不超过 word_limit(默认350字)、禁止编造未确认事实、结尾给出一条可反驳命题。
+- persona 简短。
+- public_transcript 中：最近一条对方 confirmed 全文 + 最近裁判 note。
+- claims ledger：open<=12，closed 只保留摘要<=8；obligations 未结清列表；contradictions。
+- 可选 quotes：仅当 obligations 到期或检测到“之前/刚才/第X轮/承认”等引用旧论时，从 storage 按 quote_ptr 取最多3条短片段，每条<=120字。
+- 估算 input_tokens：有 tiktoken 就用，没有就按 len(text)//1.6 粗略估，超过 input_budget(默认3500) 自动降级为“仅最近一条+top5 open claims+obligations”。
+
+发言流程：speak(speaker) 调用 provider，生成草稿 Message(status=draft) 并展示；裁判确认后 status=confirmed 落盘，并运行 memory.update_after_confirmed()。记忆写入器在 MOCK_MODE 用规则抽取；真实模式可用便宜模型/同一JUDGE_AI低温输出 JSON delta：new_claims, attacks, concessions, new_obligations, contradictions, close_claims。解析失败不阻断主流程，只记 SYSTEM note。
+
+UI 要求：
+- 左栏：辩题、正反方、回合数(默认6)、每轮字数(默认350)、mock_mode开关、strict_evidence开关、权重滑杆、模型名展示(不显示key)、累计usage展示。
+- 中栏：消息气泡按角色着色；draft 用虚线框并明确“未确认，不进入公共记录”；每条显示状态/模型/耗时/usage。
+- 右栏：按钮：开始辩论、让A发言、确认A、驳回A、让B发言、确认B、驳回B、插入裁判备注、终局评分、导出。按钮状态严格由 engine.can 控制；非法操作 st.error 且不改变状态。
+- 驳回：当前 draft 标 rejected，不进入公共记录；允许同方重写一次；重写仍走 draft->确认。
+- 裁判备注：输入框保存为 REFEREE note，可选择“是否公开给下一位辩手”，默认公开。
+
+评分：回合结束后 SCORING。JUDGE_AI 只看到 confirmed 公共记录 + claims/summary，不看到草稿/key/配置。提示词强制输出 JSON：{"A":{"logic":0-10,"evidence":0-10,"rebuttal":0-10,"clarity":0-10},"B":{...},"winner":"A|B|tie","reason":"<=120字"}。温度0；JSON提取失败重试2次；最终失败标记 judge_ai_invalid=true 并只用裁判分。合并：final_side = weight_judge*judge_side + weight_ai*ai_side；胜者按 final_A/final_B 比较，差值<0.2 判 tie。保存 score.json。
+
+持久化：每次 confirm/reject/note/score 立即 append debates/{debate_id}.jsonl；页面刷新后若 debate_id 存在，能从 JSONL 恢复 state/messages/claims/score 到 session_state。导出按钮生成 transcript.jsonl 与 score.json 的下载。
+
+安全与质量：禁止打印 API key；异常要捕获并显示可读错误；真实 API 调用设置 timeout=60s 和最多1次重试；不要编造运行结果。代码风格清晰，函数短，注释只在关键规则处。
+
+完成定义（必须逐项自检并在README末尾勾选）：
+[ ] MOCK_MODE=true 时，不配置任何真实 key，能从开始到6轮结束再到评分导出完整跑通。
+[ ] A 未确认前，“让B发言”按钮禁用；强行调用 engine.transition 会抛 IllegalTransition。
+[ ] rejected 草稿不出现在 build_prompt_for 的公共上下文。
+[ ] 第6轮后 build_prompt_for 的估算 input 不超过 input_budget，且与第2轮相比增长不超过30%。
+[ ] JUDGE_AI 返回非JSON时重试2次，仍失败则 judge_ai_invalid=true。
+[ ] 刷新页面后 transcript/claims/score 可恢复。
+[ ] README 包含 secrets.example.toml 字段说明和运行命令。
+
+请先输出：1) 将创建的文件树；2) 状态机表；3) 关键实现策略不超过10条。等我确认或直接继续时，再逐个文件生成完整代码。若当前环境允许创建文件，直接创建；不要先安装依赖，生成 requirements.txt 即可。
+
+补充修正：禁止把发言字数限制写死。350 只能是默认值 DEFAULT_WORD_LIMIT=350。实际每场辩论的 word_limit 必须来自 DebateState，读取优先级：UI本场设置 > .streamlit/secrets.toml 的 defaults.word_limit > 代码常量 DEFAULT_WORD_LIMIT。左栏必须提供本场配置：word_limit 可输入/滑杆，范围 100-1000，默认350；max_rounds、input_budget、output_max_tokens 同理做成每场可配置，只允许有默认值，不允许硬编码。切换辩题/新建辩论时可使用新配置；同一场辩论进行中修改配置只能影响之后回合，且要在 SYSTEM note 记录“从第r轮起 word_limit 350->500”。导出 score.json/transcript.jsonl 必须包含本场最终 config 快照。build_prompt_for 和 speak 一律读取 state.config.word_limit/output_max_tokens，不得出现字面量 350/500 作为逻辑限制。超字处理也可配置：mode=truncate|penalty|reject，默认 penalty；penalty 时在裁判确认面板提示“超x字”，由裁判决定确认并扣分或驳回。完成定义第4条改为：默认 word_limit=350，但用测试把本场改成500后，提示词、输出上限、超字判定都应跟随500；代码搜索除 DEFAULT_WORD_LIMIT/README 示例外不得存在裸 350 作为限制。所有“默认350/默认6轮/默认预算3500”只能集中在 config.py 的 DEFAULTS 和 secrets.example.toml 注释示例；业务逻辑 engine.py/memory.py/scoring.py/app.py 运行时禁止引用这些字面量，必须读 state.config。
