@@ -1,5 +1,6 @@
 # ============ 真实密钥：绝对不许入库 ============
 .streamlit/secrets.toml
+.git-credentials
 
 # ============ 虚拟环境与 Python 缓存 ============
 .venv/
