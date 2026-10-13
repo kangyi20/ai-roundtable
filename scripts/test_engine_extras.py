@@ -9,6 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import engine
+import prompts
 from providers import MockProvider, _extract_json
 
 
@@ -122,10 +123,79 @@ def test_early_stop():
     assert s.round_no < 6
 
 
+def test_ask_judge_requires_done():
+    """讨论没结束之前不能向裁判追问。"""
+    s = _fresh()
+    assert not engine.can("ask", s)
+    try:
+        engine.ask_judge(s, MockProvider(role="judge", side="JUDGE_AI"), "我该怎么选？")
+        raise AssertionError("未结束时追问应当抛错")
+    except engine.IllegalTransition:
+        pass
+
+
+def test_ask_judge_multiturn():
+    """DONE 之后可多轮追问，问答成对记录，用量计入统计。"""
+    s = _fresh()
+    s.state = "ROUND_END"
+    s = engine.summarize(s, MockProvider(role="judge", side="JUDGE_AI"))
+    assert s.state == "DONE"
+    assert engine.can("ask", s)
+
+    judge = MockProvider(role="judge", side="JUDGE_AI")
+    s = engine.ask_judge(s, judge, "如果换成我，你会建议我怎么选？")
+    assert len(s.qa) == 2, "一轮问答应产生 user + judge 两条"
+    assert s.qa[0]["role"] == "user" and s.qa[1]["role"] == "judge"
+    assert s.qa[1]["content"].strip()
+    assert s.totals["usage_out"] > 0, "追问用量应计入统计"
+
+    s = engine.ask_judge(s, judge, "那哪一边更着急？")
+    assert len(s.qa) == 4, "应支持多轮追问"
+
+    # 空问题应被拒绝，且不写入记录
+    try:
+        engine.ask_judge(s, judge, "   ")
+        raise AssertionError("空问题应当抛错")
+    except ValueError:
+        pass
+    assert len(s.qa) == 4
+
+
+def test_qa_prompt_excludes_L1():
+    """追问提示词里只能出现 L2 处境，绝不能出现 L1 之外的注入内容。"""
+    s = _fresh()
+    s.user_context = "他做决定时负担感较重"
+    s.state = "ROUND_END"
+    s = engine.summarize(s, MockProvider(role="judge", side="JUDGE_AI"))
+    msgs = prompts.build_judge_qa_messages(s, "我该怎么选？", history=s.qa)
+    blob = " ".join(m["content"] for m in msgs)
+    assert "他做决定时负担感较重" in blob, "L2 处境应注入"
+    assert "绝不能提及或暗示" in blob, "提示词必须带禁止泄露的约束"
+    assert msgs[-1]["content"] == "我该怎么选？", "最后一条应是当前问题"
+
+
+def test_ask_judge_empty_answer_rolls_back():
+    """裁判返回空内容时应报错，且不留下半截问答。"""
+    s = _fresh()
+    s.state = "ROUND_END"
+    s = engine.summarize(s, MockProvider(role="judge", side="JUDGE_AI"))
+    empty_judge = MockProvider(role="judge", side="JUDGE_AI", empty_content=True)
+    try:
+        engine.ask_judge(s, empty_judge, "问题")
+        raise AssertionError("空回答应当抛错")
+    except ValueError:
+        pass
+    assert s.qa == [], "失败时不应留下半截记录"
+
+
 if __name__ == "__main__":
     test_summarize_success()
     test_summarize_failure_retry()
     test_early_stop()
     test_extract_json()
     test_stance_change_and_converge()
+    test_ask_judge_requires_done()
+    test_ask_judge_multiturn()
+    test_qa_prompt_excludes_L1()
+    test_ask_judge_empty_answer_rolls_back()
     print("ALL ENGINE EXTRA TESTS PASSED")

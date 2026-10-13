@@ -29,6 +29,15 @@
       <div class="stances" id="stances" hidden></div>
       <div class="conclusion" id="conclusion" hidden></div>
       <div class="conclusion" id="score" hidden></div>
+
+      <div class="qa" id="qaPanel" hidden>
+        <h4>💬 向裁判追问</h4>
+        <div class="qa-hint">讨论结束了，但你还可以继续问裁判——它看过全场记录，会带着全局判断回答你。</div>
+        <div class="qa-history" id="qaHistory"></div>
+        <textarea id="f_question" rows="2" placeholder="例如：如果换成我，你会建议我怎么选？"></textarea>
+        <button class="btn primary" id="btn_ask">提问</button>
+      </div>
+
       <div class="feed" id="feed">
         <div class="empty" id="empty">
           <div class="empty-icon">🌸</div>

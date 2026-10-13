@@ -459,7 +459,10 @@ class MockProvider(Provider):
     ) -> tuple[NormalizedMessage, int, int, int]:
         content = ""
         if not self.empty_content:
-            content = self._mock_speaker_text(messages)
+            if self.role == "judge":
+                content = self._mock_judge_answer(messages)
+            else:
+                content = self._mock_speaker_text(messages)
         usage_in = len(str(messages)) // 2
         usage_out = len(content) // 2 if content else 64
         dirty_reason = ""
@@ -494,6 +497,21 @@ class MockProvider(Provider):
         usage_in = len(str(messages)) // 2
         usage_out = len(json.dumps(data, ensure_ascii=False)) // 2
         return data, 80, usage_in, usage_out
+
+    def _mock_judge_answer(self, messages: list[dict[str, str]]) -> str:
+        """MOCK：模拟裁判在讨论结束后的追问回答。"""
+        question = ""
+        for m in reversed(messages or []):
+            if m.get("role") == "user":
+                question = str(m.get("content") or "")
+                break
+        return (
+            f"【MOCK 裁判回答】你问的是「{question[:40]}」。"
+            "结合刚才这场讨论：双方其实没有站在同一个取舍标准上——"
+            "A 更看重可积累的长期收益，B 更看重不可复制的当下体验。"
+            "如果让我给一个判断：先把最不可逆的那件事想清楚，"
+            "再看哪一边拖久了代价更高。这只是我基于本场讨论的看法。"
+        )
 
     def _mock_speaker_text(self, messages: list[dict[str, str]]) -> str:
         side_label = self.side or "某方"

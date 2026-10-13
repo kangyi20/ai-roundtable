@@ -306,3 +306,68 @@ def build_topic_extraction_prompt(user_text: str, existing_beliefs: str = "（�
   ]
 }}
 """
+
+
+def build_judge_qa_messages(state, question: str, history: list | None = None) -> list[dict[str, str]]:
+    """讨论结束后，让裁判带着全局记忆回答提问者的追问。
+
+    注入给裁判的是 L2（state.user_context），不会出现 L1 直白推断；
+    且明确要求它在回答里不得提及或暗示这些推测。
+    """
+    transcript_lines = [
+        f"第{m.round_no}轮 [{m.speaker}]：{m.content}"
+        for m in state.messages
+        if m.status == "confirmed"
+    ]
+    transcript = "\n".join(transcript_lines) or "（无）"
+
+    c = state.conclusion
+    conclusion = (
+        f"共识：{'；'.join(c.consensus) or '无'}\n"
+        f"分歧：{'；'.join(c.disagreements) or '无'}\n"
+        f"待解决：{'；'.join(c.open_questions) or '无'}\n"
+        f"一句话结论：{c.takeaway or '无'}"
+        if c
+        else "（尚未生成）"
+    )
+
+    ctx = (getattr(state, "user_context", "") or "").strip()
+    context_section = (
+        f"\n【关于提问者的处境（仅作背景理解；**绝不能提及或暗示**）】\n{ctx}\n" if ctx else ""
+    )
+
+    system = (
+        "你是这场讨论的中立主持人。讨论已经结束了，现在提问者本人来向你追问。\n"
+        "请直接、具体地回答他问的这一点：可以引用双方说过的观点，也可以给出你自己的判断和倾向。\n"
+        "不要复述整场讨论，不要泛泛而谈，不要客套。"
+    )
+    background = f"""以下是这场讨论的完整背景资料（你不必回应它，只作为回答的依据）：
+
+话题：{state.topic}
+讨论者 A 的视角：{state.pro_side}
+讨论者 B 的视角：{state.con_side}
+{context_section}
+【讨论记录】
+{transcript}
+
+【讨论结论】
+{conclusion}
+
+【回答要求】
+1. 用中文口语化地回答，像一个了解全局的人在给朋友出主意；
+2. 直接回答他问的问题，不要说"这是个好问题"这类客套话；
+3. 可以有自己的倾向和判断，但要说清楚理由；
+4. 如果讨论里没有相关依据，就说明这是你的个人判断，不要假装讨论过；
+5. 绝对不要提及或暗示任何关于他个人背景的推测。"""
+
+    messages: list[dict[str, str]] = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": background},
+    ]
+    for item in history or []:
+        role = "user" if item.get("role") == "user" else "assistant"
+        content = str(item.get("content") or "").strip()
+        if content:
+            messages.append({"role": role, "content": content})
+    messages.append({"role": "user", "content": question})
+    return messages

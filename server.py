@@ -137,6 +137,7 @@ def snapshot(state) -> dict:
         "messages": [m.model_dump(exclude={"reasoning"}) for m in state.messages],
         "conclusion": state.conclusion.model_dump() if state.conclusion else None,
         "conclusion_error": state.conclusion_error,
+        "qa": state.qa,
         "score": state.score.model_dump() if state.score else None,
         "totals": state.totals,
         "cost_cny": cost,
@@ -439,6 +440,24 @@ async def score(request: Request):
         return JSONResponse({"error": str(e)}, status_code=400)
 
 
+async def ask(request: Request):
+    """讨论结束后向裁判追问（深度任务，不限制 token）。"""
+    debate_id = request.path_params["debate_id"]
+    body = await request.json()
+    question = (body.get("question") or "").strip()
+    if not question:
+        return JSONResponse({"error": "问题不能为空"}, status_code=400)
+
+    def _fn(state):
+        provider = build_provider(SECRETS, "judge", "JUDGE_AI", state, temperature=0.4)
+        return engine.ask_judge(state, provider, question)
+
+    try:
+        return JSONResponse(await _run_mutation(debate_id, _fn))
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+
 _EXPORT_DOWNLOAD = {
     "transcript": "transcript.jsonl",
     "score": "score.json",
@@ -636,6 +655,7 @@ routes = [
     Route("/api/{debate_id}/note", add_note, methods=["POST"]),
     Route("/api/{debate_id}/summarize", summarize, methods=["POST"]),
     Route("/api/{debate_id}/score", score, methods=["POST"]),
+    Route("/api/{debate_id}/ask", ask, methods=["POST"]),
     Route("/api/{debate_id}/export", export, methods=["POST"]),
     Route("/api/{debate_id}/export/{kind}", export_file),
     Route("/api/{debate_id}/auto/start", auto_start, methods=["POST"]),

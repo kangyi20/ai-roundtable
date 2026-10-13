@@ -239,6 +239,7 @@ function render(s) {
     document.getElementById("stances").hidden = true;
     document.getElementById("conclusion").hidden = true;
     renderScore(null);
+    renderQA([], null);
     document.getElementById("exportLinks").innerHTML = "";
     renderFeed([]);
     renderControls(null);
@@ -264,8 +265,56 @@ function render(s) {
 
   renderConclusion(s.conclusion);
   renderScore(s.score);
+  renderQA(s.qa || [], s.state);
   renderFeed(s.messages);
   renderControls(s);
+}
+
+/* ---------------- 讨论结束后向裁判追问 ---------------- */
+
+function renderQA(qa, state) {
+  const panel = document.getElementById("qaPanel");
+  panel.hidden = state !== "DONE";
+  const hist = document.getElementById("qaHistory");
+  hist.innerHTML = (qa || [])
+    .map((item) => {
+      const isUser = item.role === "user";
+      return (
+        `<div class="qa-item ${isUser ? "user" : "judge"}">` +
+        `<span class="qa-role">${isUser ? "你" : "裁判"}</span>` +
+        `${isUser ? esc(item.content) : esc(item.content)}</div>`
+      );
+    })
+    .join("");
+  if (hist.lastElementChild) hist.lastElementChild.scrollIntoView({ block: "nearest" });
+}
+
+async function askJudge() {
+  const box = document.getElementById("f_question");
+  const question = box.value.trim();
+  if (!question || !debateId) return;
+  const btn = document.getElementById("btn_ask");
+  btn.disabled = true;
+  btn.textContent = "裁判正在思考…";
+  try {
+    const res = await fetch(`/api/${debateId}/ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question }),
+    });
+    const data = await res.json();
+    if (data.error) {
+      alert(data.error);
+      return;
+    }
+    box.value = "";
+    render(data);
+  } catch (e) {
+    alert("追问失败：" + e);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "提问";
+  }
 }
 
 async function act(path, thinkingLabel) {
@@ -478,6 +527,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
   document.getElementById("f_load").onchange = doLoad;
   document.getElementById("btn_load").onclick = doLoad;
+  document.getElementById("btn_ask").onclick = askJudge;
   document.getElementById("btn_note").onclick = async () => {
     const text = document.getElementById("f_note").value.trim();
     if (!text) return;

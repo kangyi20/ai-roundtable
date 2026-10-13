@@ -2,10 +2,11 @@
 
 import copy
 import uuid
+from datetime import datetime
 from typing import Any
 
 import prompts
-from config import estimate_cost_cny, json_output_max_tokens, resolve_config
+from config import estimate_cost_cny, resolve_config
 from memory import (
     Conclusion,
     DebateConfig,
@@ -197,6 +198,9 @@ def can(action: str, state: DebateState) -> bool:
         return s not in ("IDLE", "DONE")
     if action == "summarize":
         return s in ("ROUND_END", "DONE") and state.conclusion is None
+    if action == "ask":
+        # 讨论结束后才能向裁判追问
+        return s == "DONE"
     if action == "score":
         return s in ("ROUND_END", "DONE") and state.score is None
     if action == "export":
@@ -497,7 +501,9 @@ def summarize(state: DebateState, provider, max_retries: int = 2) -> DebateState
         {"role": "system", "content": "你是中立的讨论主持人，只输出合法 JSON。"},
         {"role": "user", "content": prompt_text},
     ]
-    max_tokens = json_output_max_tokens(state.config)
+    # 结论属于「深度任务」：按已定策略不设 token 上限（见 需求-v2.md 任务 3.1）。
+    # 结构化调用（提炼 / 记忆提取 / 评分）才限时出 JSON。
+    max_tokens = None
 
     delta = None
     usage_in = 0
@@ -549,6 +555,32 @@ def summarize(state: DebateState, provider, max_retries: int = 2) -> DebateState
     )
     state.conclusion_error = ""
     state.state = "DONE"
+    _update_cost(state)
+    return state
+
+
+def ask_judge(state: DebateState, provider, question: str) -> DebateState:
+    """讨论结束后向裁判追问（深度任务，**不限制 token**）。
+
+    裁判带着全局记忆回答：全场已确认记录 + 结论 + 既往问答 + 提问者处境（L2）。
+    """
+    if not can("ask", state):
+        raise IllegalTransition("当前不能向裁判追问（需讨论已结束）")
+    q = (question or "").strip()
+    if not q:
+        raise ValueError("问题不能为空")
+
+    messages = prompts.build_judge_qa_messages(state, q, history=state.qa)
+    norm, _latency, uin, uout = provider.chat_text(messages, max_tokens=None, temperature=0.4)
+    answer = (norm.content or "").strip()
+    if not answer:
+        raise ValueError("裁判没有返回内容，请重试")
+
+    now = datetime.now().isoformat(timespec="seconds")
+    state.qa.append({"role": "user", "content": q, "created_at": now})
+    state.qa.append({"role": "judge", "content": answer, "created_at": now})
+    state.totals["usage_in"] += uin
+    state.totals["usage_out"] += uout
     _update_cost(state)
     return state
 

@@ -16,6 +16,10 @@
 - **MOCK_MODE**：无需 API Key 即可跑通完整流程。
 - **持久化**：每次推进立即追加 `debates/{debate_id}.jsonl`，刷新后可恢复。
 - **导出**：生成 `transcript.jsonl`、`score.json`、`config_snapshot.json`、`conclusion.json`。
+- **困惑自动提炼**：可以直接粘贴一段说不清立场的生活困惑（例如"手里几千块，该买电脑还是去旅游"）。点「开始讨论」时会**自动**调用裁判提炼出**议题 + 双方立场 + 它理解的你的处境**，回填后给你确认/修改，确认无误才真正开跑（没有多余的"提炼"按钮）。
+- **三层信息隔离（防"看穿变成伤人"）**：对提问者的推断分三层存放——**L1 直白推断**（只进画像库，**绝不注入辩论 AI**）、**L2 委婉版**（注入两个辩论 AI，只说明"该怎么和他说话"）、**L3 体贴版**（给你本人看）。辩论 AI 拿不到 L1，所以**没有能力泄露**伤人的判断，而不是"被要求别说"。
+- **跨会话用户画像**：推断会累积进本地画像库，带权重机制——再次印证 `+1`（上限 5）、被新信息推翻 `−1`、**归零自动删除**；条数上限 50，超出淘汰权重最低的。每次发言只注入权重最高的 8 条 L2。
+- **讨论后可追问裁判**：讨论结束后可以**继续向裁判提问**（多轮），它带着全场记录 + 结论 + 既往问答回答你，而不是复述 A/B 说过的话。追问属于"深度任务"，**不限制输出 token**；提炼/记忆提取这类结构化调用仍然限时出 JSON（保证启动快）。
 
 ## 文件结构
 
@@ -32,19 +36,26 @@
 ├── memory.py                       # 数据模型、提示词组装、记忆更新、token 估算
 ├── scoring.py                      # 可选质量评估（第三 AI + 人工打分合并）
 ├── storage.py                      # JSONL 追加/恢复/导出
-├── prompts.py                      # 讨论者/记录员/结论/评估提示词
+├── profile_store.py                # 用户画像库（权重增减 / 自动删除 / L1-L2 隔离）
+├── prompts.py                      # 讨论者/记录员/结论/评估/提炼/追问提示词
 ├── config.py                       # DEFAULTS 与三层配置解析
 ├── requirements.txt
 ├── README.md
 ├── .streamlit/
 │   └── secrets.example.toml        # 配置模板
 ├── scripts/
-│   └── smoke_mock.py               # 非交互 MOCK 冒烟测试
+│   ├── smoke_mock.py               # 非交互 MOCK 冒烟测试
+│   ├── test_engine_extras.py       # 结论/早停/追问等引擎回归测试
+│   └── test_profile_store.py       # 画像库权重与隔离回归测试
+├── profile/                        # 运行时自动创建（.gitignore，个人敏感数据）
+│   └── user_profile.json           # 跨会话画像库，绝不外传
 └── debates/                        # 运行时自动创建
     ├── {debate_id}.jsonl           # 讨论状态快照序列
     └── {debate_id}/
         └── exports/{时间戳}/       # 单次导出的文件
 ```
+
+> ⚠️ `profile/` 与 `.streamlit/secrets.toml` 都已在 `.gitignore` 中，**不会被提交**；画像内容也不会进入导出文件。
 
 ## 安装
 
@@ -78,6 +89,23 @@ copy .streamlit\secrets.example.toml .streamlit\secrets.toml
 配置优先级（默认）：**UI 本场设置 > 环境变量 > `st.secrets[defaults]` > `config.py DEFAULTS`**。
 设置环境变量 `AI_DEBATE_LOCK_CONFIG=true` 后优先级变为：环境变量 > UI 本场设置 > `st.secrets[defaults]` > 代码 DEFAULTS。
 可用环境变量：`AI_DEBATE_WORD_LIMIT`、`AI_DEBATE_MAX_ROUNDS`、`AI_DEBATE_EARLY_STOP`、`AI_DEBATE_MOCK_MODE` 等（见 `config.py` 的 `_ENV_MAP`）。
+
+## 用户画像（隐藏入口）
+
+AI 从你的描述里推断出的处境会累积到 `profile/user_profile.json`（**跨会话通用**）。
+为了不把"AI 对你的判断"直接摆到你面前，**页面上没有任何入口**，需要时手动访问：
+
+| 操作 | 方式 |
+|---|---|
+| 查看 | 浏览器打开 `http://127.0.0.1:8000/api/profile`，或直接打开 `profile/user_profile.json` |
+| 清空 | 直接删掉 `profile/user_profile.json`，或 `curl -X POST http://127.0.0.1:8000/api/profile/clear` |
+
+每条记录同时存两版：
+
+- `belief` —— **L1 直白推断**（如"手头并不宽裕"），**只入库，永不进入任何模型上下文**；
+- `injected_as` / `practical` —— **L2 委婉版**（如"他做决定时负担感较重，不要轻飘飘地建议花钱"），只有这一版会注入辩论 AI。
+
+因为是 L2 而非 L1 被注入，所以**不存在"辩论 AI 说漏嘴"的可能**——它压根不知道那个直白的判断。
 
 ## 运行
 
@@ -134,3 +162,8 @@ debates/{debate_id}/exports/{YYYYMMDD_HHMMSS}/
 - [x] 结论生成失败重试 2 次，仍失败回退到 ROUND_END 并可手动重试。
 - [x] 自动模式连续失败自动暂停，避免空烧 token。
 - [x] 刷新后可从 JSONL 恢复；导出四文件互不覆盖。
+- [x] **L1/L2 隔离**：注入辩论 AI 的文本里不含 L1 直白推断（`test_profile_store.py` 有断言）。
+- [x] **画像权重**：印证 +1（上限 5）/ 推翻 −1 / 归零自动删除；条数超 50 淘汰权重最低的。
+- [x] **提炼不自动开跑**：点「开始讨论」先提炼，必须确认后才真正开始；改了困惑描述会作废旧草稿。
+- [x] **追问前置条件**：讨论未结束时追问抛 `IllegalTransition`；空问题、空回答都不留半截记录。
+- [x] **token 策略**：结论与追问不限制 token；提炼 / 记忆提取 / 评分仍限时出 JSON。
