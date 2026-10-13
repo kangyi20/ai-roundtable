@@ -21,7 +21,9 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 import engine
+import prompts
 from config import estimate_cost_cny
+from profile_store import ProfileStore
 from providers import MockProvider, OpenAICompatibleProvider
 from storage import DebateStore
 
@@ -30,12 +32,15 @@ STATIC_DIR = BASE_DIR / "static"
 SECRETS_PATH = BASE_DIR / ".streamlit" / "secrets.toml"
 
 STORE = DebateStore()
+PROFILE = ProfileStore()  # 用户画像库（跨会话；本地文件，绝不外传）
 
 # 进行中的讨论（内存态） + 自动讨论控制 + SSE 队列
 ACTIVE: dict[str, object] = {}
 _AUTO_FLAGS: dict[str, bool] = {}
 _QUEUES: dict[str, queue.Queue] = {}
 _EXPORTS: dict[str, dict[str, Path]] = {}
+_DRAFTS: dict[str, dict] = {}  # 提炼草稿：draft_id -> {user_context(L2), user_context_soft(L3)}
+_DRAFT_LIMIT = 20
 _LOCK = threading.Lock()
 
 
@@ -63,9 +68,24 @@ def _persist(state) -> None:
     STORE.append_snapshot(state.debate_id, state)
 
 
-def build_provider(secrets: dict, role: str, side: str, state, temperature=None):
-    """根据角色与当前 state 构造 Provider；MOCK 模式用 MockProvider。"""
-    mock_mode = state.config.mock_mode if state is not None else True
+def _remember_draft(payload: dict) -> str:
+    """把提炼得到的 L2 处境暂存在服务端，避免下发给浏览器。"""
+    did = "d_" + uuid4().hex[:8]
+    _DRAFTS[did] = payload
+    if len(_DRAFTS) > _DRAFT_LIMIT:
+        for key in list(_DRAFTS.keys())[: len(_DRAFTS) - _DRAFT_LIMIT]:
+            _DRAFTS.pop(key, None)
+    return did
+
+
+def build_provider(secrets: dict, role: str, side: str, state, temperature=None, mock_mode=None):
+    """根据角色与当前 state 构造 Provider；MOCK 模式用 MockProvider。
+
+    mock_mode 显式传入时优先——用于"讨论还没创建"的场景（如议题提炼），
+    那时没有 state 可用来判断是否 mock。
+    """
+    if mock_mode is None:
+        mock_mode = state.config.mock_mode if state is not None else True
     if mock_mode:
         return MockProvider(role=role, side=side)
 
@@ -106,6 +126,8 @@ def snapshot(state) -> dict:
         "topic": state.topic,
         "pro_side": state.pro_side,
         "con_side": state.con_side,
+        # 注意：只暴露 L3 体贴版；state.user_context 是注入版（含画像信息），绝不下发
+        "user_context_soft": state.user_context_soft,
         "stance_a": state.stance_a or state.pro_side,
         "stance_b": state.stance_b or state.con_side,
         "converged": state.converged,
@@ -179,11 +201,91 @@ async def meta(request: Request):
     return JSONResponse({"models": models, "defaults": _defaults(), "debates": debates})
 
 
+# ---- 隐藏入口：画像查看 / 清空（页面上不提供任何按钮，只能手输地址）----
+
+async def get_profile(request: Request):
+    return JSONResponse(PROFILE.load())
+
+
+async def clear_profile(request: Request):
+    PROFILE.clear()
+    return JSONResponse({"ok": True, "stats": PROFILE.stats()})
+
+
+async def extract(request: Request):
+    """裁判从用户的一段困惑中提炼议题、双方立场与提问者处境。
+
+    发生在"讨论还没创建"的时候，所以没有 state 可判断 mock 模式，
+    由请求体显式传入或回落到默认配置。
+    """
+    body = await request.json()
+    text = (body.get("text") or "").strip()
+    if not text:
+        return JSONResponse({"error": "请先描述你的困惑"}, status_code=400)
+    mock_mode = body.get("mock_mode")
+    if mock_mode is None:
+        mock_mode = _defaults().get("mock_mode", True)
+
+    def _do():
+        provider = build_provider(
+            SECRETS, "judge", "JUDGE_AI", None, temperature=0.3, mock_mode=mock_mode
+        )
+        prompt = prompts.build_topic_extraction_prompt(text, PROFILE.brief_for_judge())
+        messages = [
+            {"role": "system", "content": "你是善于倾听的讨论主持人，只输出合法 JSON。"},
+            {"role": "user", "content": prompt},
+        ]
+        # 结构化抽取任务：限时出 JSON（不吃"深度任务不限 token"那条规则）
+        data, _lat, _uin, _uout = provider.chat_json(
+            messages, max_tokens=2048, temperature=0.3, schema_hint="extract"
+        )
+        if not isinstance(data, dict) or not (data.get("topic") or data.get("pro_side")):
+            raise ValueError("裁判没能提炼出有效内容，请重试或手动填写")
+
+        # 更新长期画像：new / reinforce / contradict → 权重增减，必要时删除
+        updates = data.get("belief_updates")
+        if isinstance(updates, list) and updates:
+            try:
+                PROFILE.apply_updates(updates)
+            except Exception:  # noqa: BLE001
+                pass  # 画像更新失败不应阻断提炼本身
+
+        # L2（注入版）留在服务端草稿缓存里，不下发给浏览器
+        draft_id = _remember_draft(
+            {
+                "user_context": str(data.get("user_context") or "").strip(),
+                "user_context_soft": str(data.get("user_context_soft") or "").strip(),
+            }
+        )
+        return {
+            "draft_id": draft_id,
+            "topic": str(data.get("topic") or "").strip(),
+            "pro_side": str(data.get("pro_side") or "").strip(),
+            "con_side": str(data.get("con_side") or "").strip(),
+            "note": str(data.get("note") or "").strip(),
+            "user_context_soft": str(data.get("user_context_soft") or "").strip(),
+        }
+
+    try:
+        return JSONResponse(await asyncio.to_thread(_do))
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"提炼失败：{e}"}, status_code=400)
+
+
 async def start(request: Request):
     body = await request.json()
     topic = (body.get("topic") or "").strip() or "人工智能利大于弊还是弊大于利"
     pro_side = (body.get("pro_side") or "").strip() or "人工智能利大于弊"
     con_side = (body.get("con_side") or "").strip() or "人工智能弊大于利"
+    # 处境上下文：L2 从服务端草稿缓存取（不下发浏览器）+ 画像里权重最高的几条
+    draft = _DRAFTS.get(str(body.get("draft_id") or "").strip()) or {}
+    user_context = str(draft.get("user_context") or "").strip()
+    user_context_soft = (
+        str(body.get("user_context_soft") or "").strip()
+        or str(draft.get("user_context_soft") or "").strip()
+    )
+    profile_text = PROFILE.injection_text()
+    merged_context = "\n".join(p for p in (profile_text, user_context) if p)
 
     config = dict(body.get("config") or {})
     # 兼容旧版：顶层基本键回退
@@ -208,6 +310,8 @@ async def start(request: Request):
                 con_side=con_side,
                 ui_config=ui_config,
                 secrets=SECRETS,
+                user_context=merged_context,
+                user_context_soft=user_context_soft,
             )
             state.state = "A_SPEAKING"
             ACTIVE[debate_id] = state
@@ -521,6 +625,9 @@ routes = [
     Route("/", index),
     Route("/static/{path:path}", static),
     Route("/api/meta", meta),
+    Route("/api/profile", get_profile),
+    Route("/api/profile/clear", clear_profile, methods=["POST"]),
+    Route("/api/extract", extract, methods=["POST"]),
     Route("/api/start", start, methods=["POST"]),
     Route("/api/state/{debate_id}", get_state),
     Route("/api/{debate_id}/speak/{side}", speak, methods=["POST"]),

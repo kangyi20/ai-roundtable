@@ -2,6 +2,9 @@
 .streamlit/secrets.toml
 .git-credentials
 
+# ============ 个人敏感数据：画像库（绝不外传）============
+profile/
+
 # ============ 虚拟环境与 Python 缓存 ============
 .venv/
 __pycache__/

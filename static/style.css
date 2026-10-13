@@ -419,8 +419,10 @@ body {
 .panel label:first-of-type { margin-top: 0; }
 
 .panel input[type=text],
+.panel input:not([type]),
 .panel input[type=number],
-.panel select {
+.panel select,
+.panel textarea {
   width: 100%;
   padding: 10px 12px;
   border: 1px solid var(--border);
@@ -428,10 +430,13 @@ body {
   background: var(--surface-2);
   color: var(--text);
   font-size: 14px;
+  font-family: inherit;
   transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
 }
+.panel textarea { font-size: 13.5px; line-height: 1.65; resize: vertical; }
 .panel input:focus,
-.panel select:focus {
+.panel select:focus,
+.panel textarea:focus {
   outline: none;
   border-color: var(--accent);
   background: var(--surface);
@@ -533,6 +538,31 @@ body {
 
 .export-links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .export-links a.btn { flex: none; text-decoration: none; text-align: center; }
+
+/* ---- 困惑提炼的「确认区」---- */
+.divider {
+  margin: 14px 0 2px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+  font-size: 12px;
+  color: var(--text-tertiary);
+  text-align: center;
+}
+.draftbox {
+  margin-top: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-3);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.draft-title { font-weight: 700; color: var(--accent); margin-bottom: 6px; }
+.draft-soft { color: var(--text); }
+.draft-note { margin-top: 6px; color: var(--text-secondary); }
+.draft-hint { margin-top: 8px; font-size: 12px; color: var(--text-tertiary); }
+.draft-loading { color: var(--text-secondary); }
+.draft-error { color: var(--danger); }
 
 .advanced {
   margin-top: 14px;

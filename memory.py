@@ -119,6 +119,8 @@ class DebateState(BaseModel):
     topic: str = ""
     pro_side: str = ""
     con_side: str = ""
+    user_context: str = ""  # 注入讨论用的处境说明（L2，含画像信息，**不对外暴露**）
+    user_context_soft: str = ""  # 给提问者本人看的体贴版（L3，可对外展示）
     config: DebateConfig
     messages: list[Message] = Field(default_factory=list)
     claims: list[Claim] = Field(default_factory=list)

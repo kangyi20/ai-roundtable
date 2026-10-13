@@ -4,6 +4,7 @@ let debateId = localStorage.getItem("debate_id") || null;
 let snapshot = null;
 let autoRunning = false;
 let es = null;
+let pendingDraft = null; // 提炼后待确认的草稿（含服务端 draft_id 与 L3 体贴版处境）
 
 const STATE_LABEL = {
   IDLE: "待开始",
@@ -280,11 +281,19 @@ async function act(path, thinkingLabel) {
 }
 
 async function start(auto) {
+  const problem = document.getElementById("f_problem").value.trim();
+  // 写了困惑但还没提炼过 → 先自动提炼，弹出确认区（没有独立的「提炼」按钮）
+  if (problem && !pendingDraft) {
+    await runExtract();
+    return;
+  }
   const num = (id) => Number(document.getElementById(id).value);
   const body = {
     topic: document.getElementById("f_topic").value.trim(),
     pro_side: document.getElementById("f_pro").value.trim(),
     con_side: document.getElementById("f_con").value.trim(),
+    draft_id: pendingDraft ? pendingDraft.draft_id : "",
+    user_context_soft: pendingDraft ? pendingDraft.user_context_soft : "",
     config: {
       word_limit: num("f_length"),
       max_rounds: num("f_rounds"),
@@ -312,8 +321,73 @@ async function start(auto) {
   }
   debateId = data.debate_id;
   localStorage.setItem("debate_id", debateId);
+  pendingDraft = null;
+  resetDraftUI();
   render(data);
   if (auto) startAuto();
+}
+
+/* ---------------- 困惑 → 议题提炼 ---------------- */
+
+async function runExtract() {
+  const problem = document.getElementById("f_problem").value.trim();
+  if (!problem) return;
+  const box = document.getElementById("draftBox");
+  box.hidden = false;
+  box.innerHTML = '<div class="draft-loading">🔍 裁判正在理解你的困惑…</div>';
+  try {
+    const res = await fetch("/api/extract", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text: problem,
+        mock_mode: document.getElementById("f_mock").checked,
+      }),
+    });
+    const data = await res.json();
+    if (data.error) {
+      box.innerHTML = `<div class="draft-error">${esc(data.error)}</div>`;
+      return;
+    }
+    if (data.topic) document.getElementById("f_topic").value = data.topic;
+    if (data.pro_side) document.getElementById("f_pro").value = data.pro_side;
+    if (data.con_side) document.getElementById("f_con").value = data.con_side;
+    pendingDraft = {
+      draft_id: data.draft_id || "",
+      user_context_soft: data.user_context_soft || "",
+    };
+    box.innerHTML =
+      '<div class="draft-title">✨ 裁判已经理解你的困惑，请确认后开始</div>' +
+      (data.user_context_soft ? `<div class="draft-soft">${esc(data.user_context_soft)}</div>` : "") +
+      (data.note ? `<div class="draft-note">双方的真正分歧：${esc(data.note)}</div>` : "") +
+      '<div class="draft-hint">议题与双方立场已自动填到下面，可直接修改；确认无误后点「✅ 确认，开始讨论」。</div>';
+    box.hidden = false;
+    updateStartButtons();
+  } catch (e) {
+    box.innerHTML = `<div class="draft-error">提炼失败：${esc(String(e))}</div>`;
+  }
+}
+
+function resetDraftUI() {
+  const box = document.getElementById("draftBox");
+  if (box) {
+    box.hidden = true;
+    box.innerHTML = "";
+  }
+  updateStartButtons();
+}
+
+function updateStartButtons() {
+  const b1 = document.getElementById("btn_start");
+  const b2 = document.getElementById("btn_autostart");
+  if (!b1 || !b2) return;
+  if (pendingDraft) {
+    b1.textContent = "✅ 确认，开始讨论";
+    b2.textContent = "✅ 确认并自动讨论";
+  } else {
+    b1.textContent = "开始讨论（手动）";
+    b2.textContent = "自动讨论";
+  }
 }
 
 function startAuto() {
@@ -383,8 +457,17 @@ document.addEventListener("DOMContentLoaded", async () => {
     debateId = null;
     localStorage.removeItem("debate_id");
     snapshot = null;
+    pendingDraft = null;
+    resetDraftUI();
     render(null);
   };
+  // 改动困惑描述后，之前提炼的草稿就过期了，需要重新提炼
+  document.getElementById("f_problem").addEventListener("input", () => {
+    if (pendingDraft) {
+      pendingDraft = null;
+      resetDraftUI();
+    }
+  });
   function doLoad() {
     const id = document.getElementById("f_load").value;
     if (!id) return;

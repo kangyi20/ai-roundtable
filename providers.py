@@ -487,6 +487,8 @@ class MockProvider(Provider):
             data = self._mock_score()
         elif schema_hint == "conclusion":
             data = self._mock_conclusion()
+        elif schema_hint == "extract":
+            data = self._mock_extract(messages)
         else:
             data = self._mock_memory_delta(messages)
         usage_in = len(str(messages)) // 2
@@ -541,4 +543,43 @@ class MockProvider(Provider):
             "open_questions": ["缺少一个可量化的判断标准"],
             "takeaway": "总体上，双方倾向于一个更平衡、留有校验余地的结论。",
             "aligned": False,
+        }
+
+    def _mock_extract(self, messages: list[dict[str, str]] | None = None) -> dict[str, Any]:
+        """MOCK：模拟裁判的提炼结果（含画像增量）。
+
+        若提示里已经带上画像条目（形如 id=b_xxxx），则返回 reinforce，
+        以便离线测试也能覆盖"权重累加"这条逻辑。
+        """
+        text = json.dumps(messages or [], ensure_ascii=False)
+        ids = re.findall(r"id=(b_[0-9a-f]+)", text)
+        if ids:
+            updates: list[dict[str, Any]] = [
+                {
+                    "action": "reinforce",
+                    "id": ids[0],
+                    "injected_as": "他做决定时负担感较重",
+                    "practical": "不要轻飘飘地建议花钱，要正视他的取舍成本",
+                    "evidence": "（MOCK）用户再次提到类似的取舍困境",
+                }
+            ]
+        else:
+            updates = [
+                {
+                    "action": "new",
+                    "category": "经济状况",
+                    "belief": "（MOCK）手头并不宽裕，这笔钱对他有分量",
+                    "injected_as": "他做决定时负担感较重",
+                    "practical": "不要轻飘飘地建议花钱，要正视他的取舍成本",
+                    "evidence": "（MOCK）用户提到手里有几千块钱并在两个用途间犹豫",
+                }
+            ]
+        return {
+            "topic": "（MOCK）这笔钱该投在长期收益还是当下体验上",
+            "pro_side": "（MOCK）投在能带来长期收益的方向",
+            "con_side": "（MOCK）投在当下最想体验、以后未必有机会的事",
+            "note": "（MOCK）分歧在于如何看待短期体验与长期积累的取舍",
+            "user_context": "（MOCK）他做决定时负担感较重，讨论请贴近他的取舍成本，不要轻飘飘地建议花钱",
+            "user_context_soft": "（MOCK）我理解你在认真权衡这笔钱该怎么用",
+            "belief_updates": updates,
         }
