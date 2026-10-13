@@ -236,12 +236,13 @@ async def extract(request: Request):
             {"role": "system", "content": "你是善于倾听的讨论主持人，只输出合法 JSON。"},
             {"role": "user", "content": prompt},
         ]
-        # 结构化抽取任务：限时出 JSON（不吃"深度任务不限 token"那条规则）
+        # 结构化抽取任务：设上限但不设紧（推理模型的思考也占输出额度，
+        # 卡太死会把 JSON 截断 —— 实测 2048 会截断，这里给足余量）
         data, _lat, _uin, _uout = provider.chat_json(
-            messages, max_tokens=2048, temperature=0.3, schema_hint="extract"
+            messages, max_tokens=8192, temperature=0.3, schema_hint="extract"
         )
         if not isinstance(data, dict) or not (data.get("topic") or data.get("pro_side")):
-            raise ValueError("裁判没能提炼出有效内容，请重试或手动填写")
+            raise ValueError("裁判没能提炼出有效内容（可能是输出被截断），请重试一次或手动填写")
 
         # 更新长期画像：new / reinforce / contradict → 权重增减，必要时删除
         updates = data.get("belief_updates")
