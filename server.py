@@ -128,6 +128,7 @@ def snapshot(state) -> dict:
         "con_side": state.con_side,
         # 注意：只暴露 L3 体贴版；state.user_context 是注入版（含画像信息），绝不下发
         "user_context_soft": state.user_context_soft,
+        "mode": state.mode,
         "stance_a": state.stance_a or state.pro_side,
         "stance_b": state.stance_b or state.con_side,
         "converged": state.converged,
@@ -281,6 +282,9 @@ async def start(request: Request):
     con_side = (body.get("con_side") or "").strip() or "人工智能弊大于利"
     # 处境上下文：L2 从服务端草稿缓存取（不下发浏览器）+ 画像里权重最高的几条
     draft = _DRAFTS.get(str(body.get("draft_id") or "").strip()) or {}
+    mode = (body.get("mode") or "manual").strip().lower()
+    if mode not in ("manual", "auto"):
+        mode = "manual"
     user_context = str(draft.get("user_context") or "").strip()
     user_context_soft = (
         str(body.get("user_context_soft") or "").strip()
@@ -314,6 +318,7 @@ async def start(request: Request):
                 secrets=SECRETS,
                 user_context=merged_context,
                 user_context_soft=user_context_soft,
+                mode=mode,
             )
             state.state = "A_SPEAKING"
             ACTIVE[debate_id] = state
@@ -354,9 +359,19 @@ async def _run_mutation(debate_id: str, fn):
     return await asyncio.to_thread(_do)
 
 
+def _auto_conflict(debate_id: str) -> str | None:
+    """自动讨论推进中时拒绝手动操作——否则两边会抢着发言。"""
+    if _AUTO_FLAGS.get(debate_id):
+        return "自动讨论正在推进，请先「⏸ 暂停」再做手动操作"
+    return None
+
+
 async def speak(request: Request):
     debate_id = request.path_params["debate_id"]
     side = request.path_params["side"].upper()
+    conflict = _auto_conflict(debate_id)
+    if conflict:
+        return JSONResponse({"error": conflict}, status_code=409)
 
     def _fn(state):
         provider = build_provider(SECRETS, "speaker", side, state)
@@ -372,6 +387,9 @@ async def speak(request: Request):
 async def confirm(request: Request):
     debate_id = request.path_params["debate_id"]
     side = request.path_params["side"].upper()
+    conflict = _auto_conflict(debate_id)
+    if conflict:
+        return JSONResponse({"error": conflict}, status_code=409)
 
     def _fn(state):
         provider = build_provider(SECRETS, "memory", side, state, temperature=0.2)
@@ -388,9 +406,33 @@ async def confirm(request: Request):
 async def reject(request: Request):
     debate_id = request.path_params["debate_id"]
     side = request.path_params["side"].upper()
+    conflict = _auto_conflict(debate_id)
+    if conflict:
+        return JSONResponse({"error": conflict}, status_code=409)
 
     def _fn(state):
         return engine.reject_a(state) if side == "A" else engine.reject_b(state)
+
+    try:
+        return JSONResponse(await _run_mutation(debate_id, _fn))
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+
+async def set_mode(request: Request):
+    """切换讨论方式（手动 / 自动）。切到手动时会停掉自动循环。"""
+    debate_id = request.path_params["debate_id"]
+    body = await request.json()
+    mode = (body.get("mode") or "").strip().lower()
+    if mode not in ("manual", "auto"):
+        return JSONResponse({"error": "mode 只能是 manual 或 auto"}, status_code=400)
+
+    if mode == "manual":
+        _AUTO_FLAGS[debate_id] = False  # 切回手动必须停掉自动循环
+
+    def _fn(state):
+        state.mode = mode
+        return state
 
     try:
         return JSONResponse(await _run_mutation(debate_id, _fn))
@@ -602,8 +644,11 @@ def _auto_loop(debate_id: str):
 async def auto_start(request: Request):
     debate_id = request.path_params["debate_id"]
     with _LOCK:
-        if _get_state(debate_id) is None:
+        state = _get_state(debate_id)
+        if state is None:
             return JSONResponse({"error": "讨论不存在"}, status_code=404)
+        state.mode = "auto"  # 启动自动讨论即切到自动模式
+        _persist(state)
     _AUTO_FLAGS[debate_id] = True
     threading.Thread(target=_auto_loop, args=(debate_id,), daemon=True).start()
     return JSONResponse({"ok": True})
@@ -657,6 +702,7 @@ routes = [
     Route("/api/{debate_id}/summarize", summarize, methods=["POST"]),
     Route("/api/{debate_id}/score", score, methods=["POST"]),
     Route("/api/{debate_id}/ask", ask, methods=["POST"]),
+    Route("/api/{debate_id}/mode", set_mode, methods=["POST"]),
     Route("/api/{debate_id}/export", export, methods=["POST"]),
     Route("/api/{debate_id}/export/{kind}", export_file),
     Route("/api/{debate_id}/auto/start", auto_start, methods=["POST"]),

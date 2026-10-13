@@ -1,17 +1,21 @@
 """持久化：JSONL 追加、恢复、导出。"""
 
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 
 from memory import DebateState
 
+# 测试时用 AI_DEBATE_DATA_DIR 把数据写到别处，**永远不要碰用户的 debates/**
+DEFAULT_DATA_DIR = "debates"
+
 
 class DebateStore:
     """所有辩论状态以 snapshot 行追加到 debates/{debate_id}.jsonl；恢复时读取最后一行。"""
 
-    def __init__(self, root_dir: str = "debates"):
-        self.root = Path(root_dir)
+    def __init__(self, root_dir: str | None = None):
+        self.root = Path(root_dir or os.environ.get("AI_DEBATE_DATA_DIR") or DEFAULT_DATA_DIR)
         self.root.mkdir(parents=True, exist_ok=True)
 
     def debate_path(self, debate_id: str) -> Path:

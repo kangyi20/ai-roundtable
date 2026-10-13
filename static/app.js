@@ -5,6 +5,7 @@ let snapshot = null;
 let autoRunning = false;
 let es = null;
 let pendingDraft = null; // 提炼后待确认的草稿（含服务端 draft_id 与 L3 体贴版处境）
+let debateMode = localStorage.getItem("debate_mode") || "manual"; // 开始前选择的讨论方式
 
 const STATE_LABEL = {
   IDLE: "待开始",
@@ -187,31 +188,50 @@ function renderControls(s) {
   controlPanel.hidden = false;
 
   const st = s.state;
+  const mode = s.mode === "auto" ? "auto" : "manual";
+
+  // 模式标签 + 只显示当前模式的控件（手动/自动一次只能看见一个）
+  const tag = document.getElementById("modeTag");
+  tag.textContent = mode === "auto" ? "自动" : "手动";
+  tag.className = "mode-tag" + (mode === "manual" ? " manual" : "");
+  document.getElementById("autoControls").hidden = mode !== "auto";
   const manual = document.getElementById("manualControls");
+  manual.hidden = mode !== "manual";
   manual.innerHTML = "";
-  const addBtn = (label, fn, cls) => {
+
+  const addBtn = (box, label, fn, cls) => {
     const b = document.createElement("button");
     b.className = "btn" + (cls ? " " + cls : "");
     b.textContent = label;
     b.onclick = fn;
-    manual.appendChild(b);
+    box.appendChild(b);
   };
 
-  if (st === "A_SPEAKING") addBtn("让 A 发言", () => act("speak/A", "A 正在思考…"));
-  if (st === "A_WAIT_CONFIRM") {
-    addBtn("确认 A", () => act("confirm/A"), "confirm");
-    addBtn("驳回 A", () => act("reject/A"), "reject");
+  // 只有手动模式才出现"发言/确认/驳回"——自动模式下彻底不可见，杜绝冲突
+  if (mode === "manual") {
+    if (st === "A_SPEAKING") addBtn(manual, "让 A 发言", () => act("speak/A", "A 正在思考…"));
+    if (st === "A_WAIT_CONFIRM") {
+      addBtn(manual, "确认 A", () => act("confirm/A"), "confirm");
+      addBtn(manual, "驳回 A", () => act("reject/A"), "reject");
+    }
+    if (st === "B_SPEAKING") addBtn(manual, "让 B 发言", () => act("speak/B", "B 正在思考…"));
+    if (st === "B_WAIT_CONFIRM") {
+      addBtn(manual, "确认 B", () => act("confirm/B"), "confirm");
+      addBtn(manual, "驳回 B", () => act("reject/B"), "reject");
+    }
   }
-  if (st === "B_SPEAKING") addBtn("让 B 发言", () => act("speak/B", "B 正在思考…"));
-  if (st === "B_WAIT_CONFIRM") {
-    addBtn("确认 B", () => act("confirm/B"), "confirm");
-    addBtn("驳回 B", () => act("reject/B"), "reject");
+
+  // 结论 / 评分 / 导出：与"谁在发言"无关，两种模式共用。
+  // 但自动推进中时隐藏结论/评分（后台正在自己跑），避免撞车。
+  const shared = document.getElementById("sharedControls");
+  shared.innerHTML = "";
+  if (!autoRunning) {
+    if (st === "ROUND_END" || (st === "DONE" && !s.conclusion))
+      addBtn(shared, "生成结论", () => act("summarize", "正在生成结论…"));
+    if (st === "ROUND_END" || (st === "DONE" && !s.score))
+      addBtn(shared, "终局评分", () => act("score", "正在评分…"), "confirm");
   }
-  if (st === "ROUND_END" || (st === "DONE" && !s.conclusion))
-    addBtn("生成结论", () => act("summarize", "正在生成结论…"));
-  if (st === "ROUND_END" || (st === "DONE" && !s.score))
-    addBtn("终局评分", () => act("score", "正在评分…"), "confirm");
-  addBtn("导出", doExport);
+  addBtn(shared, "导出", doExport);
 
   const autoBtn = document.getElementById("btn_auto_toggle");
   if (autoRunning) {
@@ -223,6 +243,11 @@ function renderControls(s) {
     autoBtn.onclick = startAuto;
     autoBtn.disabled = st === "DONE";
   }
+
+  // 切换讨论方式
+  const sw = document.getElementById("btn_switch_mode");
+  sw.textContent = mode === "auto" ? "⇄ 交回手动模式" : "⇄ 交给自动模式推进";
+  sw.onclick = () => switchMode(mode === "auto" ? "manual" : "auto");
 
   document.querySelector(".note-box").style.display =
     st === "IDLE" || st === "DONE" ? "none" : "flex";
@@ -329,7 +354,7 @@ async function act(path, thinkingLabel) {
   render(data);
 }
 
-async function start(auto) {
+async function start() {
   const problem = document.getElementById("f_problem").value.trim();
   // 写了困惑但还没提炼过 → 先自动提炼，弹出确认区（没有独立的「提炼」按钮）
   if (problem && !pendingDraft) {
@@ -343,6 +368,7 @@ async function start(auto) {
     con_side: document.getElementById("f_con").value.trim(),
     draft_id: pendingDraft ? pendingDraft.draft_id : "",
     user_context_soft: pendingDraft ? pendingDraft.user_context_soft : "",
+    mode: debateMode,
     config: {
       word_limit: num("f_length"),
       max_rounds: num("f_rounds"),
@@ -373,7 +399,41 @@ async function start(auto) {
   pendingDraft = null;
   resetDraftUI();
   render(data);
-  if (auto) startAuto();
+  if (debateMode === "auto") startAuto();
+}
+
+/* ---------------- 讨论方式：手动 / 自动（互斥，一次只显示一个）---------------- */
+
+function setMode(mode) {
+  debateMode = mode === "auto" ? "auto" : "manual";
+  localStorage.setItem("debate_mode", debateMode);
+  document.getElementById("mode_manual").classList.toggle("active", debateMode === "manual");
+  document.getElementById("mode_auto").classList.toggle("active", debateMode === "auto");
+  document.getElementById("modeHint").textContent =
+    debateMode === "auto"
+      ? "自动模式：A/B 会自动轮流发言并自动确认，你只需看，可随时暂停。"
+      : "手动模式：每一步都由你决定——让 A 发言、确认或驳回，再让 B 发言。";
+  updateStartButtons();
+}
+
+async function switchMode(mode) {
+  if (!debateId) return;
+  const res = await fetch(`/api/${debateId}/mode`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mode }),
+  });
+  const data = await res.json();
+  if (data.error) {
+    alert(data.error);
+    return;
+  }
+  if (mode === "auto") {
+    startAuto();
+  } else {
+    stopAuto();
+  }
+  render(data);
 }
 
 /* ---------------- 困惑 → 议题提炼 ---------------- */
@@ -427,15 +487,12 @@ function resetDraftUI() {
 }
 
 function updateStartButtons() {
-  const b1 = document.getElementById("btn_start");
-  const b2 = document.getElementById("btn_autostart");
-  if (!b1 || !b2) return;
+  const b = document.getElementById("btn_go");
+  if (!b) return;
   if (pendingDraft) {
-    b1.textContent = "✅ 确认，开始讨论";
-    b2.textContent = "✅ 确认并自动讨论";
+    b.textContent = "✅ 确认，开始讨论";
   } else {
-    b1.textContent = "开始讨论（手动）";
-    b2.textContent = "自动讨论";
+    b.textContent = debateMode === "auto" ? "开始自动讨论" : "开始讨论";
   }
 }
 
@@ -456,7 +513,7 @@ function stopAuto() {
     es = null;
   }
   hideThinking();
-  renderControls(snapshot);
+  render(snapshot); // 同上：整体重渲染，状态栏才会回到"手动"
 }
 
 function openEvents() {
@@ -474,13 +531,13 @@ function openEvents() {
       hideThinking();
       if (es) es.close();
       es = null;
-      renderControls(snapshot);
+      render(snapshot); // 必须整体重渲染，否则状态栏还停在"自动推进中"
     } else if (ev.type === "error") {
       alert(ev.message);
       autoRunning = false;
       if (es) es.close();
       es = null;
-      renderControls(snapshot);
+      render(snapshot);
     }
   };
 }
@@ -497,8 +554,10 @@ async function fetchState() {
 document.addEventListener("DOMContentLoaded", async () => {
   await loadMeta();
 
-  document.getElementById("btn_start").onclick = () => start(false);
-  document.getElementById("btn_autostart").onclick = () => start(true);
+  document.getElementById("mode_manual").onclick = () => setMode("manual");
+  document.getElementById("mode_auto").onclick = () => setMode("auto");
+  document.getElementById("btn_go").onclick = () => start();
+  setMode(debateMode);
   document.getElementById("btn_new").onclick = () => {
     if (es) es.close();
     es = null;

@@ -564,6 +564,47 @@ body {
 .draft-loading { color: var(--text-secondary); }
 .draft-error { color: var(--danger); }
 
+/* ---- 讨论方式切换（手动 / 自动 二选一，一次只显示一个）---- */
+.mode-switch { display: flex; gap: 8px; margin-bottom: 8px; }
+.mode-btn {
+  flex: 1;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  font-size: 13.5px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+.mode-btn:hover { border-color: var(--accent); }
+.mode-btn.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: #d6336c;
+  font-weight: 700;
+}
+.mode-hint { font-size: 12px; color: var(--text-tertiary); line-height: 1.6; margin-bottom: 12px; }
+.mode-tag {
+  font-size: 11px;
+  font-weight: 400;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: #d6336c;
+  vertical-align: middle;
+}
+.mode-tag.manual { background: var(--surface-3); color: var(--text-secondary); }
+.btn.mode-link {
+  margin-top: 10px;
+  font-size: 12.5px;
+  background: none;
+  border: 1px dashed var(--border);
+  color: var(--text-secondary);
+}
+.btn.mode-link:hover { border-color: var(--accent); color: var(--accent); }
+
 .advanced {
   margin-top: 14px;
   border: 1px solid var(--border);

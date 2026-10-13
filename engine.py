@@ -35,6 +35,7 @@ def create_initial_state(
     secrets: dict[str, Any] | None = None,
     user_context: str = "",
     user_context_soft: str = "",
+    mode: str = "manual",
 ) -> DebateState:
     """用三层配置构造初始状态。"""
     cfg = resolve_config(ui_config, secrets)
@@ -50,6 +51,7 @@ def create_initial_state(
     state.stance_b = con_side
     state.user_context = (user_context or "").strip()
     state.user_context_soft = (user_context_soft or "").strip()
+    state.mode = mode if mode in ("manual", "auto") else "manual"
     # 初始系统提示作为第 0 轮记录，方便恢复时了解配置
     state.messages.append(
         Message(

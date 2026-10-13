@@ -19,7 +19,8 @@ from uuid import uuid4
 MAX_BELIEFS = 50          # 条数上限，超出淘汰权重最低的
 MAX_WEIGHT = 5.0          # 单条权重上限
 TOP_N_FOR_INJECT = 8      # 注入辩论 AI 时只取权重最高的前 N 条
-DEFAULT_PATH = "profile/user_profile.json"
+# 测试时用 AI_DEBATE_PROFILE_PATH 指到别处，避免动到用户真实画像
+DEFAULT_PATH = os.environ.get("AI_DEBATE_PROFILE_PATH") or "profile/user_profile.json"
 
 
 def _empty() -> dict[str, Any]:

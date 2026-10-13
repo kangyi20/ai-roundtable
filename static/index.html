@@ -117,18 +117,35 @@
           </select>
         </details>
 
+        <label>讨论方式</label>
+        <div class="mode-switch" id="modeSwitch">
+          <button class="mode-btn active" id="mode_manual" data-mode="manual">
+            <span class="mode-icon">✋</span>手动模式
+          </button>
+          <button class="mode-btn" id="mode_auto" data-mode="auto">
+            <span class="mode-icon">▶</span>自动模式
+          </button>
+        </div>
+        <div class="mode-hint" id="modeHint"></div>
+
         <div class="btn-row">
-          <button class="btn primary" id="btn_start">开始讨论（手动）</button>
-          <button class="btn accent" id="btn_autostart">自动讨论</button>
+          <button class="btn primary" id="btn_go">开始讨论</button>
         </div>
       </div>
 
       <div class="panel" id="controlPanel" hidden>
-        <h3>控制</h3>
-        <div class="btn-row">
-          <button class="btn accent" id="btn_auto_toggle">▶ 自动讨论</button>
+        <h3>控制 <span class="mode-tag" id="modeTag"></span></h3>
+
+        <div id="autoControls" hidden>
+          <div class="btn-row">
+            <button class="btn accent" id="btn_auto_toggle">▶ 自动讨论</button>
+          </div>
+          <div class="mode-hint">A/B 会自动轮流发言，可随时暂停。</div>
         </div>
+
         <div id="manualControls" class="manual-list"></div>
+        <div id="sharedControls" class="manual-list"></div>
+        <button class="btn mode-link" id="btn_switch_mode"></button>
         <div class="note-box">
           <input id="f_note" placeholder="主持人备注（可中途引导方向）" />
           <button class="btn" id="btn_note">插入备注</button>
