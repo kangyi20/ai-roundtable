@@ -61,16 +61,32 @@
 
       <div class="panel" id="startPanel">
         <h3>开始讨论</h3>
-        <label>描述你的困惑（可选 · 裁判会帮你提炼议题与双方立场）</label>
-        <textarea id="f_problem" rows="4" placeholder="例：我是数据科学专业的学生，我手里有几千块钱，而我的电脑只是办公本，打游戏和跑数据都不行，所以我想换一台电脑……但我身边的人都在出去旅游，我还没旅游过。我该用这笔钱买电脑还是去旅游？"></textarea>
+
+        <label>讨论内容来自</label>
+        <div class="mode-switch" id="sourceSwitch">
+          <button class="mode-btn active" id="src_describe" data-src="describe">📝 描述我的困惑</button>
+          <button class="mode-btn" id="src_self" data-src="self">✏️ 自己设定话题</button>
+        </div>
+
+        <!-- 页面一：描述困惑（裁判自动提炼） -->
+        <div id="paneDescribe">
+          <label>把你的困惑说清楚</label>
+          <textarea id="f_problem" rows="4" placeholder="例：我是数据科学专业的学生，我手里有几千块钱，而我的电脑只是办公本，打游戏和跑数据都不行，所以我想换一台电脑……但我身边的人都在出去旅游，我还没旅游过。我该用这笔钱买电脑还是去旅游？"></textarea>
+          <div class="mode-hint">点下面的「开始讨论」后，裁判会自动提炼出<strong>议题和双方立场</strong>，然后回填给你确认——这三项不用你填。</div>
+        </div>
+
+        <!-- 页面二：自己设定话题（不经过 AI 提炼） -->
+        <div id="paneSelf" hidden>
+          <label>话题</label>
+          <input id="f_topic" value="人工智能利大于弊还是弊大于利" />
+          <label>A 方视角</label>
+          <input id="f_pro" value="人工智能利大于弊" />
+          <label>B 方视角</label>
+          <input id="f_con" value="人工智能弊大于利" />
+          <div class="mode-hint">这三项<strong>直接用于讨论，不会被 AI 覆盖</strong>。</div>
+        </div>
+
         <div id="draftBox" class="draftbox" hidden></div>
-        <div class="divider">或者直接手填下面三项</div>
-        <label>话题</label>
-        <input id="f_topic" value="人工智能利大于弊还是弊大于利" />
-        <label>A 方视角</label>
-        <input id="f_pro" value="人工智能利大于弊" />
-        <label>B 方视角</label>
-        <input id="f_con" value="人工智能弊大于利" />
 
         <label>讨论长度</label>
         <select id="f_length">

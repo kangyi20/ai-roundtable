@@ -6,6 +6,7 @@ let autoRunning = false;
 let es = null;
 let pendingDraft = null; // 提炼后待确认的草稿（含服务端 draft_id 与 L3 体贴版处境）
 let debateMode = localStorage.getItem("debate_mode") || "manual"; // 开始前选择的讨论方式
+let contentSource = localStorage.getItem("content_source") || "describe"; // describe=描述困惑 | self=自设话题
 
 const STATE_LABEL = {
   IDLE: "待开始",
@@ -356,8 +357,9 @@ async function act(path, thinkingLabel) {
 
 async function start() {
   const problem = document.getElementById("f_problem").value.trim();
-  // 写了困惑但还没提炼过 → 先自动提炼，弹出确认区（没有独立的「提炼」按钮）
-  if (problem && !pendingDraft) {
+  // 只有「描述我的困惑」这一页才触发提炼；
+  // 「自己设定话题」这一页直接用你填的三项，绝不被 AI 覆盖。
+  if (contentSource === "describe" && problem && !pendingDraft) {
     await runExtract();
     return;
   }
@@ -400,6 +402,17 @@ async function start() {
   resetDraftUI();
   render(data);
   if (debateMode === "auto") startAuto();
+}
+
+/* ---------------- 内容来源：描述困惑 / 自设话题（互斥，一次只显示一个）---------------- */
+
+function setSource(src) {
+  contentSource = src === "self" ? "self" : "describe";
+  localStorage.setItem("content_source", contentSource);
+  document.getElementById("src_describe").classList.toggle("active", contentSource === "describe");
+  document.getElementById("src_self").classList.toggle("active", contentSource === "self");
+  document.getElementById("paneDescribe").hidden = contentSource !== "describe";
+  document.getElementById("paneSelf").hidden = contentSource !== "self";
 }
 
 /* ---------------- 讨论方式：手动 / 自动（互斥，一次只显示一个）---------------- */
@@ -469,8 +482,9 @@ async function runExtract() {
       '<div class="draft-title">✨ 裁判已经理解你的困惑，请确认后开始</div>' +
       (data.user_context_soft ? `<div class="draft-soft">${esc(data.user_context_soft)}</div>` : "") +
       (data.note ? `<div class="draft-note">双方的真正分歧：${esc(data.note)}</div>` : "") +
-      '<div class="draft-hint">议题与双方立场已自动填到下面，可直接修改；确认无误后点「✅ 确认，开始讨论」。</div>';
+      '<div class="draft-hint">已自动切到「✏️ 自己设定话题」，提炼出的议题与双方立场就在下面，可直接修改；确认无误后点「✅ 确认，开始讨论」。</div>';
     box.hidden = false;
+    setSource("self"); // 切到可编辑页，让用户看得见提炼结果并确认
     updateStartButtons();
   } catch (e) {
     box.innerHTML = `<div class="draft-error">提炼失败：${esc(String(e))}</div>`;
@@ -553,6 +567,10 @@ async function fetchState() {
 
 document.addEventListener("DOMContentLoaded", async () => {
   await loadMeta();
+
+  document.getElementById("src_describe").onclick = () => setSource("describe");
+  document.getElementById("src_self").onclick = () => setSource("self");
+  setSource(contentSource);
 
   document.getElementById("mode_manual").onclick = () => setMode("manual");
   document.getElementById("mode_auto").onclick = () => setMode("auto");
