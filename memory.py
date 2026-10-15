@@ -174,8 +174,14 @@ def _last_opponent_confirmed(state: DebateState, side: str) -> tuple[str, str]:
 
 
 def _format_claims(state: DebateState) -> str:
-    """open<=6，closed 摘要<=3；单条文本截断至 40 字，控制 prompt 增长。"""
+    """open<=6，conceded<=4，closed<=3；单条截断，控制 prompt 增长。
+
+    注意：conceded（已被认同）的观点**必须也显示出来**。它既不在 open 也不在 closed，
+    如果不显示就会从上下文里彻底消失，导致 AI 反复认同同一个点
+    （实测出现过同一句话认了两遍）。
+    """
     open_claims = [c for c in state.claims if c.status == "open"][:6]
+    conceded_claims = [c for c in state.claims if c.status == "conceded"][:4]
     closed_claims = [c for c in state.claims if c.status == "closed"][:3]
     lines = []
     if open_claims:
@@ -183,6 +189,11 @@ def _format_claims(state: DebateState) -> str:
         for c in open_claims:
             text = c.text[:40] + "..." if len(c.text) > 40 else c.text
             lines.append(f"- [{c.owner}] {text}")
+    if conceded_claims:
+        lines.append("【已经互相认同的观点（不要再重复表态）】")
+        for c in conceded_claims:
+            summary = (c.summary or c.text)[:30]
+            lines.append(f"- [{c.owner}] {summary}")
     if closed_claims:
         lines.append("【已讨论清楚的观点】")
         for c in closed_claims:
@@ -388,11 +399,13 @@ def _apply_memory_delta(state: DebateState, message: Message, delta: dict[str, A
                     )
                 )
 
-    # 承认
+    # 承认：优先精确 id，其次用"观点文本出现在认可内容里"做兜底
+    # （记录员未必总能拿到 id，没有兜底的话这条机制会彻底失效）
     for item in delta.get("concessions", []):
-        target_id = item.get("target_id", "")
+        target_id = str(item.get("target_id") or "").strip()
+        text = str(item.get("text") or "")
         for c in state.claims:
-            if c.id == target_id:
+            if c.id == target_id or (text and c.text[:20] and c.text[:20] in text):
                 c.status = "conceded"
 
     # 矛盾
@@ -404,12 +417,12 @@ def _apply_memory_delta(state: DebateState, message: Message, delta: dict[str, A
             if c.id == ca_id:
                 c.contradicts.append(cb_id or text)
 
-    # 关闭主张
+    # 关闭主张：同样加文本兜底
     for item in delta.get("close_claims", []):
-        cid = item.get("claim_id", "")
-        reason = item.get("reason", "")
+        cid = str(item.get("claim_id") or "").strip()
+        reason = str(item.get("reason") or "")
         for c in state.claims:
-            if c.id == cid:
+            if c.id == cid or (reason and c.text[:20] and c.text[:20] in reason):
                 c.status = "closed"
                 c.summary = reason or c.text[:40]
 

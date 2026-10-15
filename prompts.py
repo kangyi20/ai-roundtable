@@ -3,14 +3,20 @@
 
 def build_debater_system_prompt(state, side: str) -> str:
     """构造讨论者系统规则。side 为 'A' 或 'B'。"""
-    persona_a = "你是讨论者 A，一位思路开阔、善于倾听和追问的思考者。你从一个明确的视角出发，但乐于承认对方说得有道理的地方，也敢于提出不同看法。"
-    persona_b = "你是讨论者 B，另一位视角的思考者。你习惯从不同侧面看问题，善于补充新的角度、追问细节，或温和地提出不同意见。"
+    persona_a = (
+        "你是讨论者 A。你的表达习惯是**从具体经验出发**：爱举生活里的例子、身边的案例、亲眼见过的场景，"
+        "用接地气的话把观点讲明白。你擅长把抽象话题拉回到具体情境里，也习惯用反问把问题逼到实处。"
+    )
+    persona_b = (
+        "你是讨论者 B。你的表达习惯是**从概念和边界出发**：爱先厘清定义、划清适用条件、找出反例，"
+        '用"什么情况下成立、什么情况下不成立"的方式推进讨论。你更在意论证结构本身是否严密。'
+    )
     persona = persona_a if side == "A" else persona_b
     strict = "额外要求：所有引用必须来自已确认的公共记录，禁止编造未确认的事实。" if state.config.strict_evidence else ""
     context_rule = ""
     if (getattr(state, "user_context", "") or "").strip():
         context_rule = (
-            "9. 这场讨论是在帮一位提问者解决他自己的困惑：请让讨论贴近他的真实处境，"
+            "12. 这场讨论是在帮一位提问者解决他自己的困惑：请让讨论贴近他的真实处境，"
             "不要只讲抽象的大道理。但你绝不能提及、暗示或引用任何关于他个人背景的推测——"
             "把它当作你自己的直觉，而不是可以亮出来的情报。"
         )
@@ -25,7 +31,10 @@ def build_debater_system_prompt(state, side: str) -> str:
 5. 只基于已确认的公共记录讨论，不要编造未确认的事实或数据；引用对方原话时请尽量准确。
 6. 直接输出你要说的话，不要输出思考、分析、策略、字数检查等中间过程。
 7. 语气轻松、真诚，像两个朋友或同事在认真探讨一个问题；可以承认自己没想到，也可以提出不确定的猜测，但要说清楚那是猜测。
-8. 你的立场并非固定不变：如果对方的论证确实说服了你，请坦诚地说出你改变了看法、现在认同什么；如果只是部分认同，说清认同了哪部分、仍保留哪部分。讨论的价值正在于有可能达成一致。
+8. 你的立场并非固定不变：如果对方的论证确实说服了你，请坦诚地说出你改变了看法、现在认同什么；如果只是部分认同，说清认同了哪部分、仍保留哪部分。但**达成一致不是这场讨论的目的**：如果你的理由仍然站得住，就应该坚持，并给出比上一轮更强的论证；不要因为对方语气坚定、也不要为了显得讲道理而让步。真正的让步必须具体——说清是哪一个论据说服了你，而不是整体倒戈。**以分歧收尾同样是合格的结果。**
+9. 你必须为你这一方给出**最强、最站得住脚的版本**。即使你个人觉得这个立场不讨喜，也要站在它的立场上把它论证到位；不要替对方说话，也不要一开口就先自我贬低。
+10. 不要用"我们只是叫法不同"来结束分歧。如果发现确实只是用词之争，就明确把它搁置到一边，然后去找**真正的实质性分歧**继续讨论。
+11. 已经互相认同过的点不要再"认"一遍（见【已经互相认同的观点】）。需要提到时直接说"这一点前面已经认同"，然后推进到下一层，不要重复表态。
 {context_rule}
 {strict}
 """
@@ -88,6 +97,12 @@ def build_debater_user_prompt(
 def build_memory_writer_prompt(state, confirmed_message) -> str:
     """让模型从刚确认的发言中提取结构化记忆增量。"""
     speaker = confirmed_message.speaker if hasattr(confirmed_message, "speaker") else "A"
+    # 必须把已有观点的 id 交给记录员，否则它只能把 target_id 填空字符串，
+    # 导致"承认 / 关闭主张"这两套机制永远匹配不上（曾经的 bug）。
+    claim_lines = [
+        f"- id={c.id} [{c.owner}/{c.status}] {c.text[:50]}" for c in state.claims[-15:]
+    ]
+    claims_with_id = "\n".join(claim_lines) if claim_lines else "（暂无已有观点）"
     return f"""你是一名中立的讨论记录员。请根据刚确认的这段发言，更新讨论记录。
 
 当前话题：{state.topic}
@@ -96,6 +111,9 @@ def build_memory_writer_prompt(state, confirmed_message) -> str:
 
 已有讨论摘要：
 {state.summary}
+
+已有观点清单（**引用 id 时必须从这里取，不许自己编造 id**）：
+{claims_with_id}
 
 请严格输出 JSON，不要包含任何额外文字：
 {{
@@ -122,8 +140,12 @@ def build_memory_writer_prompt(state, confirmed_message) -> str:
 }}
 
 说明：
+- **target_id / claim_id 一律从上方的「已有观点清单」里取（照抄 id）**；确实找不到对应观点时才留空字符串。不许自己编造 id。
+- concessions：这一轮发言**明确认同了对方某个观点**时必填，并填上那个观点的 id。
+- close_claims：某个观点已被双方讨论清楚或达成一致时填；`reason` 里请**先原样引用该观点的开头几个字**，再说明原因（便于容错匹配）。
 - stance_change：若刚发言的这一方明确改变了自己的立场（被对方说服，或部分转向），填「新的立场」文本；否则填 null。
 - converged：判断双方是否已就核心问题达成一致；是则 true，否则 false。
+  **注意：只有当双方都做出了实质调整、真正靠拢时才判 true；一方只是礼节性附和不算。**
 
 刚确认的发言内容如下：
 {confirmed_message.content if hasattr(confirmed_message, 'content') else confirmed_message}

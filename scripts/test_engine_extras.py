@@ -9,6 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import engine
+import memory
 import prompts
 from providers import MockProvider, _extract_json
 
@@ -188,7 +189,98 @@ def test_ask_judge_empty_answer_rolls_back():
     assert s.qa == [], "失败时不应留下半截记录"
 
 
+def _confirmed_msg(speaker: str = "A"):
+    from memory import Message
+
+    return Message(
+        debate_id="test",
+        round_no=1,
+        speaker=speaker,
+        side="pro" if speaker == "A" else "con",
+        status="confirmed",
+        content="（测试发言）",
+    )
+
+
+def test_memory_concession_linking():
+    """承认必须能落库：既支持精确 id，也支持 id 为空时的文本兜底。
+
+    历史 bug：写入器提示词从没给出观点 id，而 concessions 只做精确 id 匹配
+    → 该机制从未生效，导致 AI 反复认同同一个点。
+    """
+    s = _fresh()
+    memory._apply_memory_delta(
+        s, _confirmed_msg("A"),
+        {"new_claims": [{"text": "强者应当嘲讽那些不奋斗的人", "evidence_state": "none"}]},
+    )
+    memory._apply_memory_delta(
+        s, _confirmed_msg("B"),
+        {"new_claims": [{"text": "嘲讽会实实在在伤害到弱者", "evidence_state": "none"}]},
+    )
+    c1, c2 = s.claims[0], s.claims[1]
+    assert c1.status == "open" and c2.status == "open"
+
+    # 1) 按 id 承认
+    memory._apply_memory_delta(
+        s, _confirmed_msg("B"), {"concessions": [{"target_id": c1.id, "text": "我认同这一点"}]}
+    )
+    assert c1.status == "conceded", "按 id 的承认应当生效"
+
+    # 2) id 为空 → 文本兜底
+    memory._apply_memory_delta(
+        s, _confirmed_msg("A"),
+        {"concessions": [{"target_id": "", "text": "我接受「嘲讽会实实在在伤害到弱者」这个说法"}]},
+    )
+    assert c2.status == "conceded", "id 为空时应靠文本兜底匹配"
+
+
+def test_close_claim_by_text_fallback():
+    """关闭主张同样要有文本兜底。"""
+    s = _fresh()
+    memory._apply_memory_delta(
+        s, _confirmed_msg("A"), {"new_claims": [{"text": "这是个被讨论清楚的观点", "evidence_state": "none"}]}
+    )
+    c = s.claims[0]
+    memory._apply_memory_delta(
+        s, _confirmed_msg("B"),
+        {"close_claims": [{"claim_id": "", "reason": "这是个被讨论清楚的观点，双方已一致"}]},
+    )
+    assert c.status == "closed"
+
+
+def test_conceded_claims_visible_in_prompt():
+    """已被认同的观点必须出现在讨论者上下文里，否则 AI 会重复认账。"""
+    s = _fresh()
+    memory._apply_memory_delta(
+        s, _confirmed_msg("A"),
+        {"new_claims": [{"text": "这是一条已经让掉的观点内容", "evidence_state": "none"}]},
+    )
+    c = s.claims[0]
+    memory._apply_memory_delta(s, _confirmed_msg("B"), {"concessions": [{"target_id": c.id, "text": "认同"}]})
+    assert c.status == "conceded"
+
+    text = memory._format_claims(s)
+    assert "已经互相认同" in text, "应有专门的已认同区块"
+    assert "这是一条已经让掉的观点内容"[:20] in text, "已认同的观点内容必须仍然可见"
+
+
+def test_memory_writer_prompt_exposes_claim_ids():
+    """写入器提示词必须交代观点 id，否则 target_id 永远匹配不上。"""
+    s = _fresh()
+    memory._apply_memory_delta(
+        s, _confirmed_msg("A"), {"new_claims": [{"text": "需要被引用的观点", "evidence_state": "none"}]}
+    )
+    c = s.claims[0]
+    prompt_text = prompts.build_memory_writer_prompt(s, _confirmed_msg("B"))
+    assert f"id={c.id}" in prompt_text, "提示词里必须出现观点 id"
+    assert "已有观点清单" in prompt_text
+
+
 if __name__ == "__main__":
+    test_memory_concession_linking()
+    test_close_claim_by_text_fallback()
+    test_conceded_claims_visible_in_prompt()
+    test_memory_writer_prompt_exposes_claim_ids()
     test_summarize_success()
     test_summarize_failure_retry()
     test_early_stop()

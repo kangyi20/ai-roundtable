@@ -7,6 +7,8 @@ let es = null;
 let pendingDraft = null; // 提炼后待确认的草稿（含服务端 draft_id 与 L3 体贴版处境）
 let debateMode = localStorage.getItem("debate_mode") || "manual"; // 开始前选择的讨论方式
 let contentSource = localStorage.getItem("content_source") || "describe"; // describe=描述困惑 | self=自设话题
+let lastFeedCount = 0; // 上一次渲染的消息条数（用于判断是否该自动滚到底部）
+let feedDebateId = null; // 上一次渲染的是哪条讨论
 
 const STATE_LABEL = {
   IDLE: "待开始",
@@ -119,7 +121,14 @@ function renderFeed(messages) {
     return;
   }
   for (const m of messages) feed.appendChild(renderMessage(m));
-  feed.scrollTop = feed.scrollHeight;
+  // 现在整列一起滚动，所以滚的是 .chat-col。
+  // 只有"同一条讨论里新增了消息"才自动滚到底部；刚加载历史记录时停在顶部，
+  // 这样先看到的是讨论结论，而不是跳到最后一句。
+  const col = document.querySelector(".chat-col");
+  const sameDebate = feedDebateId === debateId;
+  if (col && sameDebate && messages.length > lastFeedCount) col.scrollTop = col.scrollHeight;
+  feedDebateId = debateId;
+  lastFeedCount = messages.length;
 }
 
 function renderConclusion(c) {
@@ -136,12 +145,19 @@ function renderConclusion(c) {
     items && items.length
       ? `<div class="card"><div class="ct">${icon} ${title}</div><ul>${items.map((i) => `<li>${esc(i)}</li>`).join("")}</ul></div>`
       : "";
+  // 用 <details> 包裹，默认展开；收起后就能顺畅往下读两个 AI 的讨论
   el.innerHTML =
-    `<h2>🎯 讨论结论</h2>${badge}` +
+    '<details open><summary class="fold-head">' +
+    '<span class="fold-title">🎯 讨论结论</span>' +
+    badge +
+    '<span class="fold-toggle">点击折叠 / 展开</span>' +
+    "</summary>" +
+    '<div class="fold-body">' +
     card("✅", "双方共识", c.consensus) +
     card("⚡", "主要分歧", c.disagreements) +
     card("❓", "待解决问题", c.open_questions) +
-    (c.takeaway ? `<div class="takeaway">💡 一句话结论：${esc(c.takeaway)}</div>` : "");
+    (c.takeaway ? `<div class="takeaway">💡 一句话结论：${esc(c.takeaway)}</div>` : "") +
+    "</div></details>";
 }
 
 function renderScore(score) {
